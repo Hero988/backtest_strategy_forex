@@ -18,7 +18,7 @@ if not mt5.initialize(login=login, password=password, server=server):
     quit()
 
 # Function to gather Forex data for a single pair
-def gather_forex_data(symbol, timeframe, start_date, end_date):
+def gather_forex_data(symbol, timeframe, start_date):
     timeframes = {
         "1m": mt5.TIMEFRAME_M1,
         "5m": mt5.TIMEFRAME_M5,
@@ -31,7 +31,7 @@ def gather_forex_data(symbol, timeframe, start_date, end_date):
         raise ValueError(f"Invalid timeframe '{timeframe}'. Valid options: {list(timeframes.keys())}")
 
     start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
+    end = datetime.now() + timedelta(hours=1)
     rates = mt5.copy_rates_range(symbol, timeframes[timeframe], start, end)
 
     if rates is None:
@@ -55,14 +55,13 @@ def collect_and_save_forex_data(symbols, timeframe, save_dir):
         if earliest_date is None:
             continue
         start = earliest_date.strftime("%Y-%m-%d")
-        end_present = datetime.now().strftime("%Y-%m-%d")
 
         # Create a folder for the symbol
         symbol_dir = os.path.join(save_dir, symbol)
         os.makedirs(symbol_dir, exist_ok=True)
 
         # Gather data for the past 5 years
-        df_all_data = gather_forex_data(symbol, timeframe, start, end_present)
+        df_all_data = gather_forex_data(symbol, timeframe, start)
         if df_all_data is not None:
             file_path_all_data = os.path.join(symbol_dir, f"{symbol}_all_data.csv")
             df_all_data.to_csv(file_path_all_data)
