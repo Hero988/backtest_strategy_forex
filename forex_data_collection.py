@@ -3,7 +3,8 @@ import pandas as pd
 import os
 import MetaTrader5 as mt5
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 
 # Load environment variables for MT5 login credentials
 load_dotenv()
@@ -47,32 +48,62 @@ def collect_and_save_forex_data(symbols, timeframe, save_dir):
     # Ensure the save directory exists
     os.makedirs(save_dir, exist_ok=True)
 
-    # Define date ranges
-    end_5_years = "2023-12-31"
-    start_5_years = "2018-01-01"
-    start_present = "2024-01-01"
-    end_present = datetime.now().strftime("%Y-%m-%d")
-
     for symbol in symbols:
         print(f"Collecting data for {symbol}...")
+
+        earliest_date = find_earliest_date(symbol, timeframe)
+        if earliest_date is None:
+            continue
+        start = earliest_date.strftime("%Y-%m-%d")
+        end_present = datetime.now().strftime("%Y-%m-%d")
 
         # Create a folder for the symbol
         symbol_dir = os.path.join(save_dir, symbol)
         os.makedirs(symbol_dir, exist_ok=True)
 
         # Gather data for the past 5 years
-        df_5_years = gather_forex_data(symbol, timeframe, start_5_years, end_5_years)
-        if df_5_years is not None:
-            file_path_5_years = os.path.join(symbol_dir, f"{symbol}_5_years.csv")
-            df_5_years.to_csv(file_path_5_years)
-            print(f"Saved 5-year data for {symbol} to {file_path_5_years}.")
+        df_all_data = gather_forex_data(symbol, timeframe, start, end_present)
+        if df_all_data is not None:
+            file_path_all_data = os.path.join(symbol_dir, f"{symbol}_all_data.csv")
+            df_all_data.to_csv(file_path_all_data)
+            print(f"Saved All data for {symbol} to {file_path_all_data}.")
 
-        # Gather data for 2024 to present
-        df_present = gather_forex_data(symbol, timeframe, start_present, end_present)
-        if df_present is not None:
-            file_path_present = os.path.join(symbol_dir, f"{symbol}_2024_present.csv")
-            df_present.to_csv(file_path_present)
-            print(f"Saved 2024-present data for {symbol} to {file_path_present}.")
+def find_earliest_date(symbol, timeframe):
+    timeframes = {
+        "1m": mt5.TIMEFRAME_M1,
+        "5m": mt5.TIMEFRAME_M5,
+        "15m": mt5.TIMEFRAME_M15,
+        "1h": mt5.TIMEFRAME_H1,
+        "4h": mt5.TIMEFRAME_H4,
+        "1d": mt5.TIMEFRAME_D1,
+    }
+
+    if timeframe not in timeframes:
+        raise ValueError(f"Invalid timeframe '{timeframe}'. Valid options: {list(timeframes.keys())}")
+
+    # Ensure the symbol is available in Market Watch
+    if not mt5.symbol_select(symbol, True):
+        print(f"Failed to select symbol {symbol}. Ensure it is in Market Watch.")
+        return None
+
+    # Start searching backwards
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365 * 24)  # Start searching 50 years back
+    step = timedelta(days=365 * 5)  # Query in chunks of 5 years
+
+    while start_date < end_date:
+        rates = mt5.copy_rates_from(symbol, timeframes[timeframe], start_date, 1)
+        if rates is not None and len(rates) > 0:
+            # Found earliest data
+            earliest_date = datetime.utcfromtimestamp(rates[0]['time'])
+            return earliest_date
+        
+        # Move the search window 5 years earlier
+        end_date = start_date
+        start_date -= step
+
+    print(f"No data available for {symbol} on {timeframe}.")
+    return None
 
 # List of currency pairs to collect
 symbols = [
@@ -85,10 +116,10 @@ symbols = [
 ]
 
 # Directory to save CSV files
-save_directory = "forex_data_pair_per_folder_1D"
+save_directory = "forex_data_pair_per_folder_all_data_1h"
 
 # Collect data for all symbols
-collect_and_save_forex_data(symbols, "1d", save_directory)
+collect_and_save_forex_data(symbols, "1h", save_directory)
 
 # Shutdown MetaTrader 5
 mt5.shutdown()
