@@ -1,0 +1,5 @@
+Total Trades: 129
+Wins: 65
+Losses: 64
+Win Percentage: 50.3875968992248
+Final Equity: 16599.969999999645
