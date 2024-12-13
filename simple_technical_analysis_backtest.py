@@ -55,38 +55,20 @@ def generate_signals_with_trend(df):
     Returns:
         DataFrame: The input DataFrame with additional columns for SMAs, signals, and positions.
     """
-    short_window = 5
-    long_window = 25
     df_copy = df.copy()
 
-    # Calculate moving averages
-    df_copy['SMA_short'] = df_copy['close'].rolling(window=short_window).mean()
-    df_copy['SMA_long'] = df_copy['close'].rolling(window=long_window).mean()
-    df_copy['SMA_trend'] = df_copy['close'].rolling(window=long_window * 2).mean()  # Longer SMA for trend direction
-
-    # Generate signals based on crossovers and trend direction
+    # Generate signals based on RSI
     df_copy['signal'] = 0
 
-    # Detect buy signal (short SMA crosses above long SMA and trend is bullish)
-    df_copy.loc[
-        (df_copy['SMA_short'] > df_copy['SMA_long']) &
-        (df_copy['SMA_short'].shift(1) <= df_copy['SMA_long'].shift(1)) &
-        (df_copy['close'] > df_copy['SMA_trend']),  # Bullish trend
-        'signal'
-    ] = 1
+    # Detect buy signal (RSI < 30, oversold)
+    df_copy.loc[df_copy['RSI'] < 30, 'signal'] = 1
 
-    # Detect sell signal (short SMA crosses below long SMA and trend is bearish)
-    df_copy.loc[
-        (df_copy['SMA_short'] < df_copy['SMA_long']) &
-        (df_copy['SMA_short'].shift(1) >= df_copy['SMA_long'].shift(1)) &
-        (df_copy['close'] < df_copy['SMA_trend']),  # Bearish trend
-        'signal'
-    ] = -1
+    # Detect sell signal (RSI > 70, overbought)
+    df_copy.loc[df_copy['RSI'] > 70, 'signal'] = -1
 
     # Shift signal to apply on the next bar
     df_copy['position'] = df_copy['signal'].shift()
-
-    return df_copy, short_window, long_window
+    return df_copy
 
 def backtest_strategy(df, pair_folder, pair_output_dir, initial_balance=10000):
     """
@@ -105,10 +87,10 @@ def backtest_strategy(df, pair_folder, pair_output_dir, initial_balance=10000):
         drawdown_history (list): Drawdown history over time.
         df (DataFrame): Updated DataFrame with signals and positions.
     """
-    stop_loss=500 
-    take_profit=1000
+    stop_loss=100 
+    take_profit=200
 
-    df_copy, short_window, long_window = generate_signals_with_trend(df)
+    df_copy = generate_signals_with_trend(df)
     
     # Backtesting logic
     equity = initial_balance
@@ -120,7 +102,7 @@ def backtest_strategy(df, pair_folder, pair_output_dir, initial_balance=10000):
     trades = []  # To log trades
 
     # Adjust lot size for JPY pairs
-    lot_size = 10000  # Default lot size
+    lot_size = 100000  # Default lot size
     if "JPY" in pair_folder:
         lot_size = 1000  # Adjust to a smaller, more reasonable lot size for JPY pairs
 
@@ -198,8 +180,8 @@ def backtest_strategy(df, pair_folder, pair_output_dir, initial_balance=10000):
         drawdown_history.append(((max_equity - equity) / max_equity) * 100)
 
         # Stop backtest if equity falls below a threshold
-        if equity_history[-1] < initial_balance - 1000:
-            break
+        #if equity_history[-1] < initial_balance - 1000:
+            #break
 
     # Calculate statistics
     total_trades = len(trades)
@@ -230,45 +212,65 @@ def backtest_strategy(df, pair_folder, pair_output_dir, initial_balance=10000):
 
 def plot_results(equity_history, drawdown_history, df, symbol, output_dir):
     """
-    Plot the backtesting results.
+    Plot the backtesting results using the 'time' column for the x-axis.
 
     Parameters:
         equity_history (list): Equity balance over time.
         drawdown_history (list): Drawdown history over time.
         df (DataFrame): Updated DataFrame with signals and positions.
         symbol (str): Trading symbol.
+        output_dir (str): Directory to save the plot.
     """
     fig, axs = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
 
+    # Ensure the 'time' column is a datetime object
+    if 'time' not in df.columns or not pd.api.types.is_datetime64_any_dtype(df['time']):
+        raise ValueError("The DataFrame must contain a 'time' column with datetime values.")
+
     # Plot equity
-    axs[0].plot(equity_history, label="Equity", color='blue')
+    aligned_time = df['time'].iloc[:len(equity_history)]
+    axs[0].plot(aligned_time, equity_history, label="Equity", color='blue')
     axs[0].set_title(f"Equity Curve ({symbol})")
     axs[0].set_ylabel("Equity")
     axs[0].legend()
     axs[0].grid()
 
     # Plot drawdown
-    axs[1].plot(drawdown_history, label="Drawdown (%)", color='red', linestyle='--')
+    axs[1].plot(aligned_time, drawdown_history, label="Drawdown (%)", color='red', linestyle='--')
     axs[1].set_title("Drawdown Over Time")
     axs[1].set_ylabel("Drawdown (%)")
     axs[1].legend()
     axs[1].grid()
 
-    # Plot price with signals
-    axs[2].plot(df['close'], label="Price", color='black')
-    axs[2].plot(df['SMA_short'], label="SMA Short", color='green', linestyle='--')
-    axs[2].plot(df['SMA_long'], label="SMA Long", color='red', linestyle='--')
-    buy_signals = df[df['signal'] == 1].index
-    sell_signals = df[df['signal'] == -1].index
-    axs[2].scatter(buy_signals, df.loc[buy_signals]['close'], label="Buy Signal", marker="^", color="green", alpha=1)
-    axs[2].scatter(sell_signals, df.loc[sell_signals]['close'], label="Sell Signal", marker="v", color="red", alpha=1)
+    # Plot price and signals
+    axs[2].plot(df['time'], df['close'], label="Price", color='black')  # Plot full price series
+    buy_signals = df[df['signal'] == 1]['time']
+    sell_signals = df[df['signal'] == -1]['time']
+    axs[2].scatter(
+        buy_signals, 
+        df.loc[buy_signals.index, 'close'], 
+        label="Buy Signal", 
+        marker="^", 
+        color="green", 
+        alpha=1
+    )
+    axs[2].scatter(
+        sell_signals, 
+        df.loc[sell_signals.index, 'close'], 
+        label="Sell Signal", 
+        marker="v", 
+        color="red", 
+        alpha=1
+    )
     axs[2].set_title("Price and Signals")
     axs[2].set_ylabel("Price")
     axs[2].legend()
     axs[2].grid()
 
+    # Set x-axis label
     plt.xlabel("Time")
-    # Save the combined plot
+    
+    # Adjust layout and save the combined plot
     plot_file = os.path.join(output_dir, f"{symbol}_equity_drawdown_plot.png")
     plt.tight_layout()
     plt.savefig(plot_file)
@@ -290,7 +292,6 @@ def process_and_segment_data(full_data_path, days_for_backtest):
     # Ensure the 'time' column is in datetime format and set it as the index
     if 'time' in df.columns:
         df['time'] = pd.to_datetime(df['time'])
-        df.set_index('time', inplace=True)
     else:
         raise ValueError("The dataset must contain a 'time' column.")
 
@@ -305,11 +306,7 @@ def process_and_segment_data(full_data_path, days_for_backtest):
     # Format the date to "YYYY-MM-DD 00:00:00"
     backtest_data_date = backtest_data_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    backtest_data_segmented = df[df.index >= backtest_data_date]
-
-    print(backtest_data_segmented.tail())
-
-    time.sleep(6000)
+    backtest_data_segmented = df[df['time'] >= backtest_data_date]
 
     return backtest_data_segmented
 
@@ -357,18 +354,7 @@ def main_function(data_dir, output_dir, days_for_backtest):
     # Save the DataFrame to a CSV or print
     final_equity_df.to_csv(final_equity_results_path, index=False)
 
-def get_candles_from_start_date(symbol, timeframe="1h", start_date="2024-01-01"):
-    """
-    Retrieve historical candles for a given symbol and timeframe starting from a specific date.
-
-    Parameters:
-        symbol (str): The trading symbol (e.g., "EURUSD").
-        timeframe (str): Timeframe for the candles ("1m", "5m", "15m", "1h", "4h", "1d").
-        start_date (str): Start date in "YYYY-MM-DD" format.
-
-    Returns:
-        DataFrame: Historical candle data with time and prices.
-    """
+def find_earliest_date(symbol, timeframe):
     timeframes = {
         "1m": mt5.TIMEFRAME_M1,
         "5m": mt5.TIMEFRAME_M5,
@@ -381,23 +367,56 @@ def get_candles_from_start_date(symbol, timeframe="1h", start_date="2024-01-01")
     if timeframe not in timeframes:
         raise ValueError(f"Invalid timeframe '{timeframe}'. Valid options: {list(timeframes.keys())}")
 
-    # Parse the start date
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.now() + timedelta(hours=1)
-
-    # Get rates from MetaTrader 5
-    rates = mt5.copy_rates_range(symbol, timeframes[timeframe], start_date_obj, end_date_obj)
-
-    if rates is None or len(rates) == 0:
-        print(f"No data retrieved for {symbol} from {start_date}")
+    # Ensure the symbol is available in Market Watch
+    if not mt5.symbol_select(symbol, True):
+        print(f"Failed to select symbol {symbol}. Ensure it is in Market Watch.")
         return None
 
-    # Convert to DataFrame
+    # Start searching backwards
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365 * 24)  # Start searching 50 years back
+    step = timedelta(days=365 * 5)  # Query in chunks of 5 years
+
+    while start_date < end_date:
+        rates = mt5.copy_rates_from(symbol, timeframes[timeframe], start_date, 1)
+        if rates is not None and len(rates) > 0:
+            # Found earliest data
+            earliest_date = datetime.utcfromtimestamp(rates[0]['time'])
+            return earliest_date
+        
+        # Move the search window 5 years earlier
+        end_date = start_date
+        start_date -= step
+
+    print(f"No data available for {symbol} on {timeframe}.")
+    return None
+
+# Function to gather Forex data for a single pair
+def gather_forex_data(symbol, timeframe, start_date):
+    timeframes = {
+        "1m": mt5.TIMEFRAME_M1,
+        "5m": mt5.TIMEFRAME_M5,
+        "15m": mt5.TIMEFRAME_M15,
+        "1h": mt5.TIMEFRAME_H1,
+        "4h": mt5.TIMEFRAME_H4,
+        "1d": mt5.TIMEFRAME_D1,
+    }
+    if timeframe not in timeframes:
+        raise ValueError(f"Invalid timeframe '{timeframe}'. Valid options: {list(timeframes.keys())}")
+
+    end = datetime.now() + timedelta(hours=1)
+    rates = mt5.copy_rates_range(symbol, timeframes[timeframe], start_date, end)
+
+    if rates is None:
+        print(f"No data retrieved for {symbol}")
+        return None
+
     df = pd.DataFrame(rates)
     df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
     return df
 
-def get_latest_signal(symbol, short_window=5, long_window=50):
+def get_latest_signal(symbol, timeframe='1h'):
     """
     Retrieve historical candles from 2024-01-01 to the latest candle, calculate moving averages, 
     and check the latest candle for a trading signal.
@@ -413,41 +432,138 @@ def get_latest_signal(symbol, short_window=5, long_window=50):
     # Initialize MetaTrader 5 connection
     if not mt5.initialize():
         raise RuntimeError(f"Failed to initialize MT5: {mt5.last_error()}")
+    
+    earliest_date = find_earliest_date(symbol, timeframe)
+    df = gather_forex_data(symbol, timeframe="1h", start_date=earliest_date)
 
-    df = get_candles_from_start_date(symbol, timeframe="1h", start_date="2024-01-01")
+    # Save the index as the 'time' column and reset the index
+    # Extract the index values and assign them to a new 'time' column
+    df['time'] = df.index
 
-    # Calculate moving averages
-    df['SMA_short'] = df['close'].rolling(window=short_window).mean()
-    df['SMA_long'] = df['close'].rolling(window=long_window).mean()
+    # Reset the index and drop it
+    df.reset_index(drop=True, inplace=True)
 
-    # Generate signals
-    df['signal'] = 0
-    df.loc[df['SMA_short'] > df['SMA_long'], 'signal'] = 1  # Buy signal
-    df.loc[df['SMA_short'] < df['SMA_long'], 'signal'] = -1  # Sell signal
-    df['position'] = df['signal'].shift()  # Apply signal on the next bar
+    # Ensure the 'time' column is in datetime format and set it as the index
+    if 'time' in df.columns:
+        df['time'] = pd.to_datetime(df['time'])
+    else:
+        raise ValueError("The dataset must contain a 'time' column.")
 
-    # Get the latest candle's signal
-    latest_candle = df.iloc[-1]
-    signal_info = {
-        'time': latest_candle['time'],
-        'close': latest_candle['close'],
-        'SMA_short': latest_candle['SMA_short'],
-        'SMA_long': latest_candle['SMA_long'],
-        'signal': latest_candle['signal'],  # 1: Buy, -1: Sell, 0: No signal
-        'position': latest_candle['position']  # Signal applied to the next bar
-    }
+    # Apply the RSI indicator to the DataFrame
+    if 'close' in df.columns:
+        df['RSI'] = ta.rsi(df['close'], length=14)
+    else:
+        raise ValueError("The dataset must contain a 'close' column.")
+    
+    df_with_signals = generate_signals_with_trend(df)
+    
+    last_10_rows = df_with_signals.tail(10)
+
+    lastest_signals_for_10_rows = generate_signals_with_trend(last_10_rows)
+
+    latest_row = lastest_signals_for_10_rows.tail(1)
+
+    signal_info = latest_row['signal'].iloc[0]
+
+    latest_rsi = latest_row['RSI'].iloc[0]
+
+    latest_time = latest_row['time'].iloc[0]
 
     # Shutdown MetaTrader 5 connection
     mt5.shutdown()
 
-    return signal_info
+    return signal_info, latest_row, latest_rsi, latest_time
 
-# Example usage
-# symbol = "GBPNZD"
-# signal_info = get_latest_signal(symbol)
-# print(f"Latest signal for {symbol}: {signal_info}")
+def execute_trade(symbol, predicted_label, volume, stop_loss_points, take_profit_points):
+    """
+    Executes a buy or sell order based on the predicted label, with stop loss and take profit.
+    Args:
+        symbol (str): The symbol to trade.
+        predicted_label (str): 'buy' or 'sell'.
+        volume (float): The volume of the trade (lot size).
+    """
+    # Determine action type
+    action = mt5.ORDER_TYPE_BUY if predicted_label == 1 else mt5.ORDER_TYPE_SELL
 
-# Set directories
-data_directory = "forex_data_pair_per_folder_all_data_1h"
-output_directory = "forex_result"
-main_function(data_directory, output_directory, days_for_backtest=90)
+    # Get the latest price
+    tick_info = mt5.symbol_info_tick(symbol)
+    if tick_info is None:
+        print(f"Could not retrieve tick info for {symbol}. Trade aborted.")
+        return
+
+    price = tick_info.ask if action == mt5.ORDER_TYPE_BUY else tick_info.bid
+    point = mt5.symbol_info(symbol).point  # Symbol point size
+    deviation = 20  # Allowed slippage in points
+
+    # Calculate SL and TP
+    sl = price - stop_loss_points * point if action == mt5.ORDER_TYPE_BUY else price + stop_loss_points * point
+    tp = price + take_profit_points * point if action == mt5.ORDER_TYPE_BUY else price - take_profit_points * point
+
+    # Prepare the trade request
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": action,
+        "price": price,
+        "sl": sl,
+        "tp": tp,
+        "deviation": deviation,
+        "magic": 234000,  # Custom identifier for the trade
+        "comment": "Trade executed by script",
+        "type_time": mt5.ORDER_TIME_GTC,  # Good till cancelled
+        "type_filling": mt5.ORDER_FILLING_IOC,  # Immediate or cancel
+    }
+
+    # Send the trade request
+    result = mt5.order_send(request)
+    if result is None:
+        print(f"Failed to send trade request for {symbol}.")
+    elif result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"Failed to execute {predicted_label} order for {symbol}: {result.retcode}")
+        print(f"Error details: {mt5.last_error()}")
+
+def trade_live():
+    symbol = "GBPJPY"
+    journal_file = "trade_journal.csv"
+
+    while True:
+        # Retrieve all open positions
+        positions = mt5.positions_get()
+        if positions is None or len(positions) == 0:
+            # Get the latest signal and row
+            signal_info, latest_row, latest_rsi, latest_time = get_latest_signal(symbol)
+
+            if signal_info != 0:
+                # Execute the trade
+                execute_trade(symbol, predicted_label=signal_info, volume=0.5, stop_loss_points=100, take_profit_points=200)
+
+                # Log the trade in the journal
+                trade_data = latest_row.to_dict()
+                trade_data['signal'] = signal_info
+                trade_data['timestamp'] = datetime.now()
+
+                # Create or append to the trade journal
+                if not os.path.exists(journal_file):
+                    pd.DataFrame([trade_data]).to_csv(journal_file, index=False)
+                else:
+                    pd.DataFrame([trade_data]).to_csv(journal_file, mode='a', index=False, header=False)
+
+                print(f"Trade logged in {journal_file}.")
+
+        # Calculate sleep duration until 5 minutes past the next hour
+        now = datetime.now()
+        next_hour = (now + timedelta(hours=1)).replace(minute=1, second=0, microsecond=0)
+        sleep_duration = (next_hour - now).total_seconds()
+        
+        print(f"Current time: {now}. Sleeping for {sleep_duration // 60:.0f} minutes until {next_hour}, Latest signal for {symbol}: {signal_info}, Latest RSI {latest_rsi}, Latest Signal Time: {latest_time}")
+        time.sleep(sleep_duration)
+        
+
+def backtest_func():
+    # Set directories
+    data_directory = "forex_data_pair_per_folder_all_data_1h"
+    output_directory = "forex_result"
+    main_function(data_directory, output_directory, days_for_backtest=90)
+
+trade_live()
